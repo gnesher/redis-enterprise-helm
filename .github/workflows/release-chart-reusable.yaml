@@ -15,6 +15,14 @@ on:
         description: Prefix for the git tag, for example my-chart.
         required: true
         type: string
+      index_dir:
+        description: >-
+          gh-pages directory whose index.yaml lists this chart, for example
+          "ai" (served at helm.redis.io/<index_dir>). Defaults to ai to keep
+          existing callers unchanged.
+        required: false
+        default: ai
+        type: string
 
 jobs:
   release:
@@ -75,9 +83,9 @@ jobs:
       - name: Write chart releaser config
         run: |
           cat > cr.yaml <<'EOF'
-          index-path: .cr-index/ai/index.yaml
+          index-path: .cr-index/${{ inputs.index_dir }}/index.yaml
           package-path: .cr-release-packages
-          pages-index-path: ai/index.yaml
+          pages-index-path: ${{ inputs.index_dir }}/index.yaml
           pages-branch: gh-pages
           release-name-template: '{{ .Name }}-{{ .Version }}'
           EOF
@@ -114,7 +122,7 @@ jobs:
         env:
           CR_TOKEN: "${{ github.token }}"
 
-      - name: Ensure AI Pages directory exists
+      - name: Ensure Pages index directory exists
         run: |
           tmpdir=$(mktemp -d)
           trap 'rm -rf "$tmpdir"' EXIT
@@ -123,26 +131,26 @@ jobs:
             "https://x-access-token:${CR_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "$tmpdir"
 
-          mkdir -p "$tmpdir/ai"
-          touch "$tmpdir/ai/.gitkeep"
+          mkdir -p "$tmpdir/${{ inputs.index_dir }}"
+          touch "$tmpdir/${{ inputs.index_dir }}/.gitkeep"
 
           if [[ -n "$(git -C "$tmpdir" status --short)" ]]; then
             git -C "$tmpdir" config user.name "$GITHUB_ACTOR"
             git -C "$tmpdir" config user.email "$GITHUB_ACTOR@users.noreply.github.com"
-            git -C "$tmpdir" add ai/.gitkeep
-            git -C "$tmpdir" commit -m "Initialize AI Helm repository directory"
+            git -C "$tmpdir" add "${{ inputs.index_dir }}/.gitkeep"
+            git -C "$tmpdir" commit -m "Initialize ${{ inputs.index_dir }} Helm repository directory"
             git -C "$tmpdir" push origin gh-pages
           fi
         env:
           CR_TOKEN: "${{ github.token }}"
 
-      - name: Update AI Helm repository index
+      - name: Update Helm repository index
         id: publish-index
         run: |
           owner=$(cut -d '/' -f 1 <<< "$GITHUB_REPOSITORY")
           repo=$(cut -d '/' -f 2 <<< "$GITHUB_REPOSITORY")
           git fetch origin gh-pages
-          mkdir -p .cr-index/ai
+          mkdir -p ".cr-index/${{ inputs.index_dir }}"
           cr index \
             --owner "$owner" \
             --git-repo "$repo" \
