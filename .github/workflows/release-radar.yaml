@@ -1,0 +1,14 @@
+name: Release Redis Radar Chart
+
+on:
+  workflow_dispatch:
+
+jobs:
+  call-release-workflow:
+    uses: ./.github/workflows/release-chart-reusable.yaml
+    with:
+      chart_name: radar
+      chart_path: radar/charts/radar
+      tag_prefix: radar
+      index_dir: radar
+    secrets: inherit
