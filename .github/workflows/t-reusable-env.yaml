@@ -1,0 +1,23 @@
+name: T Reusable Env
+on:
+  workflow_call:
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo release
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      pages: write
+    needs:
+      - release
+    steps:
+      - id: deployment
+        run: echo page_url=https://example.com >> "$GITHUB_OUTPUT"

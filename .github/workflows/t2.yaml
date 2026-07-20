@@ -1,0 +1,7 @@
+name: T2 Secrets Inherit
+on:
+  workflow_dispatch:
+jobs:
+  call:
+    uses: ./.github/workflows/t-reusable.yaml
+    secrets: inherit
