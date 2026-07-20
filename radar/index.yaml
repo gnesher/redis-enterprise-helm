@@ -1,0 +1,31 @@
+apiVersion: v1
+entries:
+  radar:
+  - annotations:
+      charts.openshift.io/name: Redis Radar
+    apiVersion: v2
+    appVersion: 0.3.7
+    created: "2026-07-20T05:40:32.934517464Z"
+    dependencies:
+    - condition: postgresql.enabled
+      name: postgresql
+      repository: oci://registry-1.docker.io/bitnamicharts
+      version: 16.2.3
+    description: Redis Radar — Redis fleet management platform for monitoring and
+      managing Redis Enterprise, Redis Cloud, and OSS Redis clusters.
+    digest: eb1924ff6d5f3135e1b8d3a64af5cada84f85a34e643eef3e8986decf88c6cff
+    home: https://github.com/redislabsdev/re-multi-cluster-manager
+    keywords:
+    - redis
+    - monitoring
+    - fleet-management
+    - redis-enterprise
+    maintainers:
+    - email: benjamin@redis.com
+      name: Redis Labs
+    name: radar
+    type: application
+    urls:
+    - https://github.com/gnesher/redis-enterprise-helm/releases/download/radar-0.3.7/radar-0.3.7.tgz
+    version: 0.3.7
+generated: "2026-07-20T05:40:32.934529031Z"
