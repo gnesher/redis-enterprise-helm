@@ -1,0 +1,11 @@
+name: T Reusable OIDC
+on:
+  workflow_call:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      pages: write
+    steps:
+      - run: echo deploy
