@@ -1,0 +1,102 @@
+suite: launchdarkly sdk key wiring
+templates:
+  - templates/deployment-api.yaml
+  - templates/secret.yaml
+  # configmap + secret must load so the deployment checksum includes resolve.
+  - templates/configmap.yaml
+release:
+  name: radar
+
+set:
+  # Credential-less dummy DSN so the chart templates render; nothing connects.
+  database.url: "postgres://db:5432/radar"
+  database.host: db
+
+tests:
+  # ── API deployment env wiring ───────────────────────────────────────────────
+
+  - it: api deployment omits LAUNCHDARKLY_SDK_KEY when unconfigured
+    template: templates/deployment-api.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LAUNCHDARKLY_SDK_KEY
+          any: true
+
+  - it: api deployment wires LAUNCHDARKLY_SDK_KEY from the chart-managed secret
+    template: templates/deployment-api.yaml
+    set:
+      launchDarkly.sdkKey: "sdk-test-abc123"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LAUNCHDARKLY_SDK_KEY
+            valueFrom:
+              secretKeyRef:
+                name: radar-launchdarkly
+                key: LAUNCHDARKLY_SDK_KEY
+                optional: true
+          any: true
+
+  - it: api deployment references an existingSecret when provided
+    template: templates/deployment-api.yaml
+    set:
+      launchDarkly.existingSecret: my-ld-secret
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LAUNCHDARKLY_SDK_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-ld-secret
+                key: LAUNCHDARKLY_SDK_KEY
+                optional: true
+          any: true
+
+  # ── chart-managed Secret (document 0 is the database secret) ─────────────────
+
+  - it: creates the launchdarkly secret from an inline sdk key
+    template: templates/secret.yaml
+    documentIndex: 1
+    set:
+      launchDarkly.sdkKey: "sdk-test-abc123"
+    asserts:
+      - equal:
+          path: kind
+          value: Secret
+      - equal:
+          path: metadata.name
+          value: radar-launchdarkly
+      - equal:
+          path: data.LAUNCHDARKLY_SDK_KEY
+          value: c2RrLXRlc3QtYWJjMTIz
+
+  - it: creates no launchdarkly secret when sdk key and existingSecret are unset
+    template: templates/secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: creates no launchdarkly secret when only an existingSecret is referenced
+    template: templates/secret.yaml
+    set:
+      launchDarkly.existingSecret: my-ld-secret
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  # ── guard: extraEnv must not shadow the chart-managed key ────────────────────
+
+  - it: fails the render when app.extraEnv redefines LAUNCHDARKLY_SDK_KEY
+    template: templates/deployment-api.yaml
+    set:
+      launchDarkly.sdkKey: "sdk-test-abc123"
+      app.extraEnv:
+        - name: LAUNCHDARKLY_SDK_KEY
+          value: "sdk-override-should-be-rejected"
+    asserts:
+      - failedTemplate:
+          errorMessage: "app.extraEnv must not define LAUNCHDARKLY_SDK_KEY; set launchDarkly.sdkKey or launchDarkly.existingSecret instead so the chart-managed secret reference is authoritative"

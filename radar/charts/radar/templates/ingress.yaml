@@ -1,0 +1,94 @@
+{{- if .Values.ingress.enabled -}}
+{{- $cloudAuth := .Values.ingress.cloudAuth -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "radar.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  {{- if not (empty .Values.ingress.annotations) }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "radar.fullname" $ }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+{{- if $cloudAuth.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "radar.fullname" . }}-api
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{ toYaml . | nindent 4 }}
+    {{- end }}
+    nginx.ingress.kubernetes.io/auth-url: {{ printf "http://%s.%s.svc.cluster.local/auth" $cloudAuth.serviceName (default .Release.Namespace $cloudAuth.serviceNamespace) | quote }}
+    nginx.ingress.kubernetes.io/auth-method: "POST"
+    nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-Token"
+    nginx.ingress.kubernetes.io/auth-keepalive: "10"
+    nginx.ingress.kubernetes.io/proxy-buffering: "on"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "8k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, PATCH, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization,X-CSRF-Token,SM-Id-Token"
+    {{- if $cloudAuth.corsAllowOrigin }}
+    nginx.ingress.kubernetes.io/cors-allow-origin: {{ $cloudAuth.corsAllowOrigin | quote }}
+    {{- end }}
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    nginx.ingress.kubernetes.io/auth-snippet: |
+      proxy_set_header Cookie "JSESSIONID=$cookie_JSESSIONID; CAUTHSESSIONID=$cookie_CAUTHSESSIONID";
+      proxy_set_header X-CSRF-Token $http_x_csrf_token;
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Cookie "JSESSIONID=$cookie_JSESSIONID";
+      proxy_set_header X-CSRF-Token $http_x_csrf_token;
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          - path: {{ $cloudAuth.path }}
+            pathType: {{ $cloudAuth.pathType }}
+            backend:
+              service:
+                name: {{ include "radar.fullname" $ }}
+                port:
+                  name: http
+    {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,482 @@
+global:
+  # -- Default registry for all chart-rendered images. Per-image
+  # `image.registry` overrides this when set.
+  imageRegistry: ""
+  # -- Pull secrets applied to every chart-rendered pod. Merged with
+  # the chart-level `imagePullSecrets`.
+  imagePullSecrets: []
+  # -- Default StorageClass for any PersistentVolumeClaims. Consumed by
+  # the bundled Bitnami PostgreSQL subchart automatically (it falls back
+  # to `global.storageClass` when `postgresql.primary.persistence.storageClass`
+  # is empty). The radar chart itself does not provision PVCs.
+  storageClass: ""
+openshift:
+  # -- Render pod security contexts for OpenShift restricted-v2 SCC.
+  # When enabled, the chart omits runAsUser/fsGroup pins so OpenShift can
+  # assign the namespace-scoped UID/GID range at admission time.
+  enabled: false
+# -- OpenTelemetry tracing env vars for mcm-api and mcm-worker.
+# When disabled, the chart renders no OTEL_* env vars and tracing stays off.
+opentelemetry:
+  enabled: false
+  # -- OTLP/gRPC collector endpoint. Required when `enabled: true`.
+  # Scheme MUST be http or https; userinfo (`user:pass@host`) is rejected
+  # at process startup — use `headersSecret` below for collector auth.
+  endpoint: ""
+  # -- Optional per-binary service-name overrides.
+  # Empty values fall back to "mcm-api" / "mcm-worker".
+  serviceName:
+    api: ""
+    worker: ""
+  # -- Sampler. See OpenTelemetry SDK env-var spec.
+  # The default below is conservative for production; raise `arg` to "1.0"
+  # in non-production values overlays for trace validation.
+  sampler:
+    name: parentbased_traceidratio
+    arg: "0.1"
+  # -- Additional resource attributes, comma-separated.
+  # Example: "deployment.environment=prod,team=mcm".
+  resourceAttributes: ""
+  # -- Collector authentication headers, sourced from a Secret.
+  # Leave `name` empty to omit. The header value is NEVER logged by MCM.
+  # The Secret key should contain something like "Authorization=Bearer <token>".
+  headersSecret:
+    name: ""
+    key: ""
+nameOverride: ""
+fullnameOverride: ""
+# -- Radar deploy mode. "on_prem" uses the built-in local/LDAP/SAML session
+# flow. "cloud" validates Cloud Auth JWTs propagated by cloud-auth-service.
+deployMode: on_prem
+# -- Cloud Auth resource-server configuration. Required when deployMode=cloud.
+cloudAuth:
+  radarHostname: ""
+  jwksURL: ""
+  issuer: "http://internal"
+  loginRedirectURL: ""
+# -- Image configuration for all Radar components.
+# tag defaults to .Chart.AppVersion for all components.
+image:
+  registry: "docker.io"
+  app:
+    repository: redislabs/radar
+    tag: "app-v0.3.7"
+    pullPolicy: IfNotPresent
+  worker:
+    repository: redislabs/radar
+    tag: "worker-v0.3.7"
+    pullPolicy: IfNotPresent
+  migrate:
+    repository: redislabs/radar
+    tag: "migrate-v0.3.7"
+    pullPolicy: IfNotPresent
+imagePullSecrets: []
+serviceAccount:
+  create: true
+  # -- Annotations applied to the runtime ServiceAccount used by API and worker.
+  # For GKE Workload Identity, set
+  # iam.gke.io/gcp-service-account: radar-<env>@<project>.iam.gserviceaccount.com
+  annotations: {}
+  # -- Name of the runtime ServiceAccount used by API and worker.
+  name: ""
+  # -- Migration Job ServiceAccount. It is rendered as a Helm hook resource so
+  # pre-install external-DB migrations can run without using the namespace
+  # default ServiceAccount.
+  migrate:
+    # -- Name of the migration ServiceAccount used by the migrate Job. When
+    # empty, defaults to radar-flyway-migrator if serviceAccount.create is true,
+    # otherwise defaults to the namespace default ServiceAccount.
+    name: ""
+    # -- Annotations applied to the migration ServiceAccount. For GKE Workload
+    # Identity, set iam.gke.io/gcp-service-account to
+    # radar-<env>-mig@<project>.iam.gserviceaccount.com.
+    annotations: {}
+# -- API server (app) configuration
+app:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: null
+  # -- APP_ENV value. Use "production" for all non-local deployments.
+  appEnv: production
+  # -- Address and port the HTTP server listens on.
+  httpAddr: ":8080"
+  httpReadTimeout: "10s"
+  httpWriteTimeout: "15s"
+  httpIdleTimeout: "60s"
+  httpShutdownTimeout: "10s"
+  # -- Set to false only on HTTP (non-TLS) deployments to prevent the browser
+  # from dropping the session cookie.
+  sessionCookieSecure: true
+  # -- Comma-separated CORS allowed origins. Only needed when the React dev
+  # server runs separately from the API.
+  corsAllowedOrigins: ""
+  # -- Enable OSS Redis cluster support (reserved for future use).
+  ossEnabled: true
+  # -- Enable Redis Cloud (CAPI) support: cloud registration/test-connection, cloud telemetry polling, and the
+  # CAPI collection worker. When false, cloud create and test-connection are rejected.
+  cloudEnabled: false
+  # -- Redis Cloud REST API base URL used to validate cloud credentials and
+  # collect cloud telemetry. Override only for non-production control planes.
+  cloudApiBaseUrl: "https://api.redislabs.com/v1"
+  # -- RE cluster polling intervals. Accepts Go duration strings (e.g. 5m, 1h).
+  pollerIntervals:
+    actions: "5m"
+    crdbs: "5m"
+    health: "5m"
+    usage: "1h"
+  # -- HTTP timeout for outbound RE collection calls.
+  reCollectionTimeout: "30s"
+  # -- Retention policy for collection-runtime history.
+  retentionMaxAge: "8760h"
+  retentionRunInterval: "24h"
+  # -- Interval between stale-request maintenance passes.
+  maintenanceRunInterval: "1h"
+  podAnnotations: {}
+  podLabels: {}
+  # -- Extra environment variables appended to the API server container.
+  # Standard EnvVar shape (`- name: FOO\n  value: "bar"` or `valueFrom:`).
+  # Useful for test harnesses (poll-interval overrides) or org-specific knobs
+  # without growing the chart's first-class API for each one.
+  #
+  # OpenTelemetry tracing has its own first-class block at top-level
+  # `opentelemetry:` above — do NOT configure it via extraEnv. If both are
+  # set, extraEnv wins (it renders last), which is the right behaviour for
+  # one-off overrides but not for primary configuration.
+  extraEnv: []
+  #   - name: RE_CLUSTER_POLL_INTERVAL
+  #     value: "0s"
+  #   - name: SOME_FEATURE_FLAG
+  #     valueFrom:
+  #       configMapKeyRef:
+  #         name: my-flags
+  #         key: feature
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+  resources: {}
+  #   requests:
+  #     cpu: 100m
+  #     memory: 128Mi
+  #   limits:
+  #     memory: 256Mi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # -- Startup probe gives the app up to 5 minutes (30 * 10s) to become
+  # healthy before the liveness probe takes over. Prevents premature restarts
+  # during slow first DB connections. Set a probe to null to disable it;
+  # setting it to {} deep-merges chart defaults and keeps it enabled.
+  startupProbe:
+    httpGet:
+      path: /healthz/startup
+      port: http
+    failureThreshold: 30
+    periodSeconds: 10
+  livenessProbe:
+    httpGet:
+      path: /healthz/live
+      port: http
+    initialDelaySeconds: 0
+    periodSeconds: 20
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /healthz/ready
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+# -- Async worker configuration
+worker:
+  replicaCount: 1
+  # -- Internal worker HTTP port for /metrics and /healthz/*.
+  # The worker does not expose this through a public Service by default.
+  # Set this value instead of overriding WORKER_METRICS_ADDR via extraEnv so
+  # the listener, container port, and probes stay aligned.
+  httpPort: 8081
+  # -- River job queue worker concurrency for the default queue.
+  riverMaxWorkers: 10
+  podAnnotations: {}
+  podLabels: {}
+  # -- Extra environment variables appended to the worker container.
+  # Same shape as `app.extraEnv` above. OpenTelemetry tracing is configured
+  # via the top-level `opentelemetry:` block, not here. Do not define
+  # WORKER_METRICS_ADDR here; the chart owns it from worker.httpPort.
+  extraEnv: []
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # -- Worker probes use the worker's internal HTTP listener. Startup/readiness
+  # only pass after the River runtime has started; readiness fails while the
+  # process is draining. These probes require a worker image that serves
+  # /healthz/* on WORKER_METRICS_ADDR; keep the chart and worker image bump
+  # together in pinned-image GitOps rollouts. Set a probe to null to disable
+  # it; setting it to {} deep-merges chart defaults and keeps it enabled.
+  startupProbe:
+    httpGet:
+      path: /healthz/startup
+      port: metrics
+    failureThreshold: 30
+    periodSeconds: 10
+  livenessProbe:
+    httpGet:
+      path: /healthz/live
+      port: metrics
+    initialDelaySeconds: 0
+    periodSeconds: 20
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /healthz/ready
+      port: metrics
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: null
+# -- Optional PodDisruptionBudgets for API and worker workloads.
+podDisruptionBudget:
+  enabled: false
+  api:
+    minAvailable: 1
+    maxUnavailable: null
+  worker:
+    minAvailable: 1
+    maxUnavailable: null
+# -- Database migration job configuration
+migrate:
+  podAnnotations: {}
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # -- How many seconds Kubernetes waits before deleting a finished job.
+  # Applies to BOTH success and failure — if you need longer than this to
+  # inspect failed-job logs in your environment, raise it accordingly.
+  ttlSecondsAfterFinished: 300
+  # -- Maximum number of times the migration job is retried on failure.
+  backoffLimit: 3
+# -- Optional init container that TCP-probes the database before starting
+# app or worker pods. Uses busybox netcat. Disable if probing the DB
+# endpoint is not allowed from within the cluster.
+dbWaitInitContainer:
+  enabled: true
+  image:
+    repository: busybox
+    tag: "1.37"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 32Mi
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+# -- Helm test pod configuration.
+testConnection:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 32Mi
+# -- Kubernetes Service for the API server.
+#
+# The API exposes Prometheus metrics at `/metrics` on this same `http` port.
+# No extra Service or port is required to scrape it. The endpoint is
+# unauthenticated by Prometheus convention; restrict access via
+# NetworkPolicy/ingress posture.
+#
+# This chart does not render a ServiceMonitor. Configure Prometheus to scrape
+# this Service directly; see `helm/radar/README.md` ("Observability").
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+# -- Ingress for the API server
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  #   kubernetes.io/ingress.class: nginx
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  cloudAuth:
+    enabled: false
+    serviceName: cloud-auth-service
+    serviceNamespace: ""
+    path: /api
+    pathType: Prefix
+    corsAllowOrigin: ""
+  hosts:
+    - host: radar.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #   - secretName: radar-tls
+  #     hosts:
+  #       - radar.example.com
+# -- OpenShift Route for the API/UI. This is only valid on OpenShift clusters.
+route:
+  enabled: false
+  annotations: {}
+  host: ""
+  tls:
+    termination: edge
+# -- Database connectivity
+database:
+  # -- Hostname used by the DB readiness init container (TCP check).
+  # Required when postgresql.enabled is false. Ignored when postgresql.enabled is true
+  # (the bundled PostgreSQL service name is used automatically).
+  host: ""
+  # -- Port used by the DB readiness init container.
+  port: 5432
+  # -- Full DATABASE_URL (postgres://user:pass@host:5432/db?sslmode=disable).
+  # A new Secret is created from this value. Mutually exclusive with existingSecret.
+  # Required when postgresql.enabled is false and existingSecret is not set.
+  url: ""
+  # -- Optional separate writable database URL for River job queue and RE
+  # collection runtime. Falls back to DATABASE_URL when unset.
+  runtimeUrl: ""
+  # -- Name of a pre-existing Secret containing the database URL(s).
+  # When set, database.url and database.runtimeUrl are ignored.
+  existingSecret: ""
+  # -- Key in the Secret for the primary DATABASE_URL.
+  urlSecretKey: "DATABASE_URL"
+  # -- Key in the Secret for the optional RUNTIME_DATABASE_URL.
+  runtimeUrlSecretKey: "RUNTIME_DATABASE_URL"
+# -- Credential encryption key for stored LDAP bind passwords.
+# Required only when LDAP authentication is configured via the Admin UI.
+#
+# WARNING: prefer `existingSecret` for any deployment where this values file
+# may be checked into source control. The inline `encryptionKey` path renders
+# the key into the Helm release Secret in plaintext-readable form for anyone
+# with `helm get values --all` or `kubectl get secret` access in the release
+# namespace, and into your values.yaml on disk. Rotating an inline key also
+# requires touching this file rather than just rolling a Secret.
+credentials:
+  # -- Exactly 32 bytes, read as a raw string (not base64-decoded). Used as
+  # an AES-256-GCM key. Development / single-operator use only — see WARNING
+  # above and prefer `existingSecret` in production.
+  encryptionKey: ""
+  # -- Label used to track key versions for rotation.
+  encryptionKeyVersion: "v1"
+  # -- Name of a pre-existing Secret containing the encryption key.
+  # When set, credentials.encryptionKey is ignored. Recommended for production.
+  existingSecret: ""
+  encryptionKeySecretKey: "CREDENTIAL_ENCRYPTION_KEY"
+  encryptionKeyVersionSecretKey: "CREDENTIAL_ENCRYPTION_KEY_VERSION"
+  # -- File-backed credential KEK (Key-Encryption-Key): exactly 32 raw bytes
+  # (AES-256). It wraps the per-tenant DEKs that encrypt all connector/auth
+  # credentials. REQUIRED for persistent credential encryption on Kubernetes:
+  # without a provided KEK each pod generates its own ephemeral key on the
+  # container filesystem, so credentials sealed by one pod become permanently
+  # undecryptable after a restart or on any other replica. Generate with:
+  #   head -c 32 /dev/urandom
+  # Dev/single-operator only — prefer `existingSecret` in production (see WARNING).
+  # When empty and existingSecret is unset, no KEK is mounted and the app falls
+  # back to the ephemeral per-pod key (NOT safe for real data).
+  kek: ""
+  # -- Key, within the credentials Secret, holding the 32-byte KEK. The chart
+  # mounts it read-only as a file at `kekPath` on both the API and worker pods.
+  kekSecretKey: "CREDENTIAL_KEK"
+  # -- In-container path the KEK file is mounted at and read from
+  # (CREDENTIAL_KEK_PATH). Mounted 0440 and read via the pod's fsGroup.
+  kekPath: "/var/lib/mcm/kek"
+  # -- KEK backend selector (CREDENTIAL_KEK_PROVIDER, case-insensitive). Leave
+  # empty (or "file") to use the on-prem file-backed KEK at kekPath — the
+  # default, so existing releases are unaffected. "gcpkms" is reserved for a
+  # future cloud-KMS backend and is rejected at startup as not yet supported.
+  # An unsupported value fails closed on both the API and worker (no silent
+  # fallback to the file backend). Applied to both pods so they stay in sync.
+  kekProvider: ""
+# -- LaunchDarkly feature-flag integration. The API reads a server-side SDK key
+# from LAUNCHDARKLY_SDK_KEY. When neither `sdkKey` nor `existingSecret` is set,
+# LaunchDarkly is disabled and all flags fall back to their in-code defaults (a
+# no-op provider), so existing releases are unaffected.
+#
+# WARNING: prefer `existingSecret` for any deployment whose values file may be
+# checked into source control. The inline `sdkKey` path renders the key into the
+# Helm release Secret readable by anyone with `helm get values --all` or
+# `kubectl get secret` access in the release namespace.
+launchDarkly:
+  # -- LaunchDarkly server-side SDK key. Use the key for the LaunchDarkly
+  # environment this deployment targets (e.g. the "test" environment key for
+  # non-production). Dev/single-operator only — prefer `existingSecret` in
+  # production (see WARNING above).
+  sdkKey: ""
+  # -- Name of a pre-existing Secret containing the SDK key under the key
+  # LAUNCHDARKLY_SDK_KEY. When set, launchDarkly.sdkKey is ignored. Recommended
+  # for production.
+  existingSecret: ""
+# -- Bundled PostgreSQL via Bitnami chart. Set enabled: true for self-contained
+# deployments. For production, use an external managed PostgreSQL and set
+# database.url or database.existingSecret instead.
+postgresql:
+  enabled: false
+  auth:
+    username: radar
+    # -- Required when postgresql.enabled is true
+    password: ""
+    database: radar
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: ""

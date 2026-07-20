@@ -1,0 +1,39 @@
+{{- if .Values.worker.autoscaling.enabled -}}
+{{- $cpuTarget := .Values.worker.autoscaling.targetCPUUtilizationPercentage -}}
+{{- $memoryTarget := .Values.worker.autoscaling.targetMemoryUtilizationPercentage -}}
+{{- if and (eq $cpuTarget nil) (eq $memoryTarget nil) -}}
+{{- fail "worker.autoscaling requires targetCPUUtilizationPercentage or targetMemoryUtilizationPercentage when enabled" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "radar.fullname" . }}-worker
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "radar.fullname" . }}-worker
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics:
+    {{- if ne $cpuTarget nil }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $cpuTarget }}
+    {{- end }}
+    {{- if ne $memoryTarget nil }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $memoryTarget }}
+    {{- end }}
+{{- end }}

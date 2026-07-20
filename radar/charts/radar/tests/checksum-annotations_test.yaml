@@ -1,0 +1,103 @@
+suite: checksum annotations and hook-mode switching
+templates:
+  - templates/deployment-api.yaml
+  - templates/deployment-worker.yaml
+  - templates/job-migrate.yaml
+  # configmap and secret must be loaded so their include calls resolve during
+  # checksum computation inside the deployment templates.
+  - templates/configmap.yaml
+  - templates/secret.yaml
+
+# These tests assert structural properties (annotation present, valid sha256
+# format, hook mode flips with postgresql.enabled). They deliberately avoid
+# pinning specific digest values — sha256sum is deterministic, so any harmless
+# field reordering would break literal-digest assertions without indicating a
+# real regression. If you need digest-stability detection, add an explicit
+# helm-unittest snapshot test rather than re-introducing equality assertions.
+
+tests:
+  # ── api deployment ──────────────────────────────────────────────────────────
+
+  - it: api deployment has a valid checksum/configmap annotation
+    template: templates/deployment-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/configmap"]
+          pattern: "^[a-f0-9]{64}$"
+
+  - it: api deployment has a valid checksum/secret annotation
+    template: templates/deployment-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          pattern: "^[a-f0-9]{64}$"
+
+  # ── worker deployment ───────────────────────────────────────────────────────
+
+  - it: worker deployment has a valid checksum/configmap annotation
+    template: templates/deployment-worker.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/configmap"]
+          pattern: "^[a-f0-9]{64}$"
+
+  - it: worker deployment has a valid checksum/secret annotation
+    template: templates/deployment-worker.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          pattern: "^[a-f0-9]{64}$"
+
+  # ── hook-mode switching ─────────────────────────────────────────────────────
+
+  - it: migrate job uses post-install hook when postgresql is bundled
+    template: templates/job-migrate.yaml
+    set:
+      postgresql.enabled: true
+      postgresql.auth.password: testpass
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: "post-install,post-upgrade"
+
+  - it: migrate job uses pre-install hook with external database
+    template: templates/job-migrate.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: "pre-install,pre-upgrade"
+
+  # ── required-value validation ───────────────────────────────────────────────
+
+  - it: rendering fails without database.host or bundled postgresql
+    template: templates/job-migrate.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      # database.host intentionally unset
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.host is required when postgresql.enabled is false"
+
+  - it: rendering fails without postgresql.auth.password when bundled postgresql is enabled
+    template: templates/secret.yaml
+    set:
+      postgresql.enabled: true
+      # postgresql.auth.password intentionally unset
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgresql.auth.password is required when postgresql.enabled is true"

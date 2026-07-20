@@ -1,0 +1,20 @@
+{{- if .Values.podDisruptionBudget.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "radar.fullname" . }}-api
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  {{- if not (kindIs "invalid" .Values.podDisruptionBudget.api.maxUnavailable) }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.api.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.podDisruptionBudget.api.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "radar.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+{{- end }}

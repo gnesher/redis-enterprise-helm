@@ -1,0 +1,55 @@
+# OpenShift-compatible values for the default `restricted-v2` SCC.
+#
+# OpenShift assigns namespace-scoped UIDs at admission time. Keep the
+# workloads non-root, but do not pin runAsUser/fsGroup to the chart's
+# Kubernetes defaults.
+
+openshift:
+  enabled: true
+
+route:
+  enabled: true
+  tls:
+    termination: edge
+
+app:
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+worker:
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+migrate:
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+testConnection:
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault

@@ -1,0 +1,84 @@
+Radar has been deployed!
+
+API server:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else if eq .Values.service.type "LoadBalancer" }}
+  Run the following to get the external IP:
+    kubectl get svc --namespace {{ .Release.Namespace }} {{ include "radar.fullname" . }} -w
+{{- else if eq .Values.service.type "NodePort" }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "radar.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "Radar UI: http://$NODE_IP:$NODE_PORT"
+{{- else }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "radar.fullname" . }} 8080:{{ .Values.service.port }}
+  then open: http://127.0.0.1:8080
+{{- end }}
+
+Components deployed:
+  - API server  ({{ .Values.app.replicaCount }} replica{{ if gt (int .Values.app.replicaCount) 1 }}s{{ end }})
+  - Worker      ({{ .Values.worker.replicaCount }} replica{{ if gt (int .Values.worker.replicaCount) 1 }}s{{ end }})
+  - Migrate job ({{ if .Values.postgresql.enabled }}post{{ else }}pre{{ end }}-install / {{ if .Values.postgresql.enabled }}post{{ else }}pre{{ end }}-upgrade hook)
+{{- if .Values.postgresql.enabled }}
+  - PostgreSQL  (bundled, Bitnami chart)
+{{- else }}
+  - PostgreSQL  (external — {{ include "radar.database.host" . }}:{{ .Values.database.port }})
+{{- end }}
+{{- if .Values.postgresql.enabled }}
+
+NOTE: bundled PostgreSQL install order
+  The migrate job runs as a post-install/post-upgrade hook so that the
+  bundled PostgreSQL StatefulSet is ready before migrations are attempted.
+  The API and worker pods start in parallel and will CrashLoopBackOff
+  briefly until the migrate job completes; Kubernetes restarts them
+  automatically once the schema is in place.
+{{- end }}
+
+{{- if .Values.worker.autoscaling.enabled }}
+
+Worker autoscaling is enabled ({{ .Values.worker.autoscaling.minReplicas }}–{{ .Values.worker.autoscaling.maxReplicas }} replicas).
+{{- end }}
+
+{{- if not .Values.credentials.encryptionKey }}
+{{- if not .Values.credentials.existingSecret }}
+
+WARNING: credentials.encryptionKey is not set. LDAP authentication will not
+work until a CREDENTIAL_ENCRYPTION_KEY is configured and the release is
+upgraded.
+{{- end }}
+{{- end }}
+
+{{- if not (include "radar.kekEnabled" .) }}
+{{- if eq .Values.deployMode "cloud" }}
+
+WARNING: no credential KEK is configured (credentials.kek / credentials.existingSecret).
+In cloud mode the KEK must be DELIVERED — it is never generated — so the API and
+worker pods will FAIL CLOSED (CrashLoopBackOff with "KEK must be provided") and
+will not serve traffic until a KEK is present. This is intentional: cloud runs
+multiple replicas, and letting each generate its own key would silently render
+credentials sealed by one replica undecryptable by another. Provide a stable
+32-byte raw KEK before the pods can start:
+  head -c 32 /dev/urandom > kek.bin
+  kubectl create secret generic radar-credentials --from-file=CREDENTIAL_KEK=./kek.bin
+  # then set credentials.existingSecret=radar-credentials
+
+Do not base64 the value before setting credentials.kek. The chart base64-encodes
+that literal value into the Secret, so inline credentials.kek must already be
+exactly 32 raw bytes and is dev-only.
+{{- else }}
+
+WARNING: no credential KEK is configured (credentials.kek / credentials.existingSecret).
+Credential encryption is always on, so each pod will generate its OWN ephemeral
+KEK at {{ .Values.credentials.kekPath }} on the container filesystem. Credentials
+sealed by one pod become PERMANENTLY UNDECRYPTABLE after a restart or on any other
+replica. Before storing real connector/auth credentials, provide a stable 32-byte
+raw KEK:
+  head -c 32 /dev/urandom > kek.bin
+  kubectl create secret generic radar-credentials --from-file=CREDENTIAL_KEK=./kek.bin
+  # then set credentials.existingSecret=radar-credentials
+
+Inline credentials.kek is dev-only and must be exactly 32 raw bytes, not base64.
+{{- end }}
+{{- end }}

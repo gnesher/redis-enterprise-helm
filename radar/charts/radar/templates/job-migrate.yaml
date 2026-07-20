@@ -1,0 +1,140 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "radar.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    {{- if .Values.postgresql.enabled }}
+    # With bundled PostgreSQL the database is a main chart resource, so it only
+    # exists after the main phase. Running post-install/post-upgrade ensures
+    # PostgreSQL is up before migrations are attempted. The API and worker may
+    # briefly CrashLoopBackOff until this job completes; Kubernetes restarts
+    # them automatically once the schema is ready.
+    {{- else }}
+    # With an external database, run pre-install/pre-upgrade so the schema is
+    # in place before the API and worker deployments start.
+    {{- end }}
+    helm.sh/hook: {{ include "radar.migrateHookPhases" . | quote }}
+    helm.sh/hook-weight: "0"
+    # before-hook-creation: delete the previous (potentially failed) job at the
+    # next helm install/upgrade, so its logs survive until the next deploy.
+    # hook-succeeded: delete on success so a successful job doesn't linger.
+    # Note: ttlSecondsAfterFinished below applies to BOTH success and failure;
+    # set it large enough to inspect failed-job logs in your environment.
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    # ArgoCD ordering (ignored by plain Helm, which uses the helm.sh/hook above).
+    # Run migrations in the Sync phase AFTER Postgres (wave 0) and BEFORE the
+    # api/worker (wave 2), so the schema is ready without gating on app health.
+    # This keeps bundled-Postgres deploys working under ArgoCD, where the helm
+    # post-install hook would otherwise map to PostSync and deadlock (PostSync
+    # waits for the app to be Healthy, but the app needs the schema first).
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  {{- if not (kindIs "invalid" .Values.migrate.ttlSecondsAfterFinished) }}
+  ttlSecondsAfterFinished: {{ .Values.migrate.ttlSecondsAfterFinished }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "radar.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+      {{- with .Values.migrate.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "radar.migrateServiceAccountName" . }}
+      automountServiceAccountToken: {{ include "radar.migrateAutomountServiceAccountToken" . }}
+      {{- include "radar.imagePullSecrets" . | nindent 6 }}
+      {{- include "radar.podSecurityContext" (dict "root" . "context" .Values.migrate.podSecurityContext) | nindent 6 }}
+
+      {{- if .Values.dbWaitInitContainer.enabled }}
+      initContainers:
+        {{- include "radar.waitForDbInitContainer" . | nindent 8 }}
+      {{- end }}
+
+      containers:
+        - name: migrate
+          image: {{ include "radar.migrate.image" . }}
+          imagePullPolicy: {{ .Values.image.migrate.pullPolicy }}
+          {{- with .Values.migrate.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.migrate.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: APP_ENV
+              value: {{ .Values.app.appEnv | quote }}
+            # DATABASE_URL: use secretKeyRef only for user-managed secrets (not
+            # owned by this chart), so Helm-managed secrets don't need to be
+            # hooks and are properly deleted on helm uninstall. For chart-owned
+            # secrets the value is inlined — it is already stored in the Helm
+            # release secret, so this adds no additional exposure.
+            - name: DATABASE_URL
+              {{- if .Values.database.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.urlSecretKey }}
+              {{- else if .Values.postgresql.enabled }}
+              value: {{ include "radar.postgresql.url" . | quote }}
+              {{- else }}
+              value: {{ .Values.database.url | quote }}
+              {{- end }}
+            {{- if or .Values.database.runtimeUrl .Values.database.existingSecret .Values.postgresql.enabled }}
+            - name: RUNTIME_DATABASE_URL
+              {{- if .Values.database.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.runtimeUrlSecretKey }}
+                  optional: true
+              {{- else if .Values.postgresql.enabled }}
+              value: {{ include "radar.postgresql.url" . | quote }}
+              {{- else if .Values.database.runtimeUrl }}
+              value: {{ .Values.database.runtimeUrl | quote }}
+              {{- end }}
+            {{- end }}
+            {{- if or .Values.credentials.encryptionKey .Values.credentials.existingSecret }}
+            - name: CREDENTIAL_ENCRYPTION_KEY
+              {{- if .Values.credentials.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.existingSecret }}
+                  key: {{ .Values.credentials.encryptionKeySecretKey }}
+              {{- else }}
+              value: {{ .Values.credentials.encryptionKey | quote }}
+              {{- end }}
+            - name: CREDENTIAL_ENCRYPTION_KEY_VERSION
+              {{- if .Values.credentials.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.existingSecret }}
+                  key: {{ .Values.credentials.encryptionKeyVersionSecretKey }}
+              {{- else }}
+              value: {{ .Values.credentials.encryptionKeyVersion | quote }}
+              {{- end }}
+            {{- end }}
+
+      {{- with .Values.migrate.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.migrate.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.migrate.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

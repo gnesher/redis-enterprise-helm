@@ -1,0 +1,161 @@
+{{- range $env := .Values.app.extraEnv }}
+{{- if eq $env.name "LAUNCHDARKLY_SDK_KEY" }}
+{{- fail "app.extraEnv must not define LAUNCHDARKLY_SDK_KEY; set launchDarkly.sdkKey or launchDarkly.existingSecret instead so the chart-managed secret reference is authoritative" }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "radar.fullname" . }}-api
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  annotations:
+    # ArgoCD: start the API only after the migrate Job (wave 1) completes.
+    # Ignored by plain Helm.
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  {{- if not .Values.app.autoscaling.enabled }}
+  replicas: {{ .Values.app.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "radar.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "radar.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+        {{- with .Values.app.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/configmap: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.app.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "radar.apiServiceAccountName" . }}
+      {{- if eq (include "radar.runtimeAutomountServiceAccountToken" .) "true" }}
+      automountServiceAccountToken: true
+      {{- end }}
+      {{- include "radar.imagePullSecrets" . | nindent 6 }}
+      {{- include "radar.podSecurityContext" (dict "root" . "context" .Values.app.podSecurityContext) | nindent 6 }}
+
+      {{- if .Values.dbWaitInitContainer.enabled }}
+      initContainers:
+        {{- include "radar.waitForDbInitContainer" . | nindent 8 }}
+      {{- end }}
+
+      containers:
+        - name: api
+          image: {{ include "radar.app.image" . }}
+          imagePullPolicy: {{ .Values.image.app.pullPolicy }}
+          {{- with .Values.app.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          {{- with .Values.app.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.app.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.app.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.app.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "radar.fullname" . }}
+          env:
+            - name: HTTP_ADDR
+              value: {{ .Values.app.httpAddr | quote }}
+            - name: HTTP_READ_TIMEOUT
+              value: {{ .Values.app.httpReadTimeout | quote }}
+            - name: HTTP_WRITE_TIMEOUT
+              value: {{ .Values.app.httpWriteTimeout | quote }}
+            - name: HTTP_IDLE_TIMEOUT
+              value: {{ .Values.app.httpIdleTimeout | quote }}
+            - name: HTTP_SHUTDOWN_TIMEOUT
+              value: {{ .Values.app.httpShutdownTimeout | quote }}
+            - name: SESSION_COOKIE_SECURE
+              value: {{ .Values.app.sessionCookieSecure | toString | quote }}
+            {{- if .Values.app.corsAllowedOrigins }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ .Values.app.corsAllowedOrigins | quote }}
+            {{- end }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radar.databaseSecretName" . }}
+                  key: {{ .Values.database.urlSecretKey }}
+            - name: RUNTIME_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radar.databaseSecretName" . }}
+                  key: {{ .Values.database.runtimeUrlSecretKey }}
+                  optional: true
+            {{- if or .Values.credentials.encryptionKey .Values.credentials.existingSecret }}
+            # Legacy process-key path; optional so an existingSecret that supplies
+            # only the KEK (the always-on path) does not fail with a missing key.
+            - name: CREDENTIAL_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radar.credentialsSecretName" . }}
+                  key: {{ .Values.credentials.encryptionKeySecretKey }}
+                  optional: true
+            - name: CREDENTIAL_ENCRYPTION_KEY_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radar.credentialsSecretName" . }}
+                  key: {{ .Values.credentials.encryptionKeyVersionSecretKey }}
+                  optional: true
+            {{- end }}
+            {{- if include "radar.kekEnabled" . }}
+            {{- include "radar.kekEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.credentials.kekProvider }}
+            {{- include "radar.kekProviderEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if include "radar.launchDarklyEnabled" . }}
+            {{- include "radar.launchDarklyEnv" . | nindent 12 }}
+            {{- end }}
+            {{- include "radar.otelEnv" (dict "ctx" $ "defaultService" "mcm-api" "serviceOverride" .Values.opentelemetry.serviceName.api) | nindent 12 }}
+            {{- with .Values.app.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if include "radar.kekEnabled" . }}
+          volumeMounts:
+            {{- include "radar.kekVolumeMount" . | nindent 12 }}
+          {{- end }}
+
+      {{- if include "radar.kekEnabled" . }}
+      volumes:
+        {{- include "radar.kekVolume" . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.app.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.app.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.app.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

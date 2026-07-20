@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "radar.fullname" . }}-test-connection
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "radar.podSecurityContext" (dict "root" . "context" .Values.testConnection.podSecurityContext) | nindent 2 }}
+  containers:
+    - name: test-connection
+      image: {{ .Values.dbWaitInitContainer.image.repository }}:{{ .Values.dbWaitInitContainer.image.tag }}
+      imagePullPolicy: {{ .Values.dbWaitInitContainer.image.pullPolicy }}
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          URL="http://{{ include "radar.fullname" . }}:{{ .Values.service.port }}/healthz/ready"
+          echo "Testing API connectivity at $URL ..."
+          # busybox wget -qO- swallows HTTP errors (4xx/5xx exit 0), so we
+          # inspect response headers instead. -S writes headers to stderr;
+          # --spider sends a HEAD-style request without writing the body.
+          HEADERS=$(wget -S --spider -q "$URL" 2>&1)
+          echo "$HEADERS"
+          echo "$HEADERS" | grep -qE "^[[:space:]]*HTTP/[0-9.]+ 2[0-9]{2}"
+          echo "Connection test passed."
+      {{- with .Values.testConnection.resources }}
+      resources:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.testConnection.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

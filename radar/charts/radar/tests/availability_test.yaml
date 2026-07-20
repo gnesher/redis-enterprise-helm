@@ -1,0 +1,218 @@
+suite: availability primitives
+templates:
+  - templates/deployment-api.yaml
+  - templates/deployment-worker.yaml
+  - templates/hpa-api.yaml
+  - templates/hpa-worker.yaml
+  - templates/pdb-api.yaml
+  - templates/pdb-worker.yaml
+  - templates/configmap.yaml
+  - templates/secret.yaml
+
+tests:
+  - it: api autoscaling renders an HPA and omits fixed deployment replicas
+    template: templates/hpa-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      app.autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        targetCPUUtilizationPercentage: 70
+    asserts:
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: RELEASE-NAME-radar-api
+      - equal:
+          path: spec.minReplicas
+          value: 2
+      - equal:
+          path: spec.maxReplicas
+          value: 6
+      - equal:
+          path: spec.metrics[0].resource.target.averageUtilization
+          value: 70
+
+  - it: api autoscaling can render memory-only metrics
+    template: templates/hpa-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      app.autoscaling:
+        enabled: true
+        targetCPUUtilizationPercentage: null
+        targetMemoryUtilizationPercentage: 75
+    asserts:
+      - equal:
+          path: spec.metrics[0].resource.name
+          value: memory
+      - equal:
+          path: spec.metrics[0].resource.target.averageUtilization
+          value: 75
+      - isNull:
+          path: spec.metrics[1]
+
+  - it: api autoscaling fails when no metric target is configured
+    template: templates/hpa-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      app.autoscaling:
+        enabled: true
+        targetCPUUtilizationPercentage: null
+        targetMemoryUtilizationPercentage: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "app.autoscaling requires targetCPUUtilizationPercentage or targetMemoryUtilizationPercentage when enabled"
+
+  - it: api deployment omits replicas when autoscaling is enabled
+    template: templates/deployment-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      app.autoscaling.enabled: true
+    asserts:
+      - isNull:
+          path: spec.replicas
+
+  - it: worker autoscaling can render memory-only metrics
+    template: templates/hpa-worker.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      worker.autoscaling:
+        enabled: true
+        targetCPUUtilizationPercentage: null
+        targetMemoryUtilizationPercentage: 75
+    asserts:
+      - equal:
+          path: spec.metrics[0].resource.name
+          value: memory
+      - equal:
+          path: spec.metrics[0].resource.target.averageUtilization
+          value: 75
+      - isNull:
+          path: spec.metrics[1]
+
+  - it: worker autoscaling fails when no metric target is configured
+    template: templates/hpa-worker.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      worker.autoscaling:
+        enabled: true
+        targetCPUUtilizationPercentage: null
+        targetMemoryUtilizationPercentage: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "worker.autoscaling requires targetCPUUtilizationPercentage or targetMemoryUtilizationPercentage when enabled"
+
+  - it: worker exposes internal metrics health listener and probes
+    template: templates/deployment-worker.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].name
+          value: metrics
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8081
+      - equal:
+          path: spec.template.spec.containers[0].env[1].name
+          value: WORKER_METRICS_ADDR
+      - equal:
+          path: spec.template.spec.containers[0].env[1].value
+          value: ":8081"
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /healthz/startup
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: metrics
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz/live
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: metrics
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /healthz/ready
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: metrics
+
+  - it: worker extraEnv cannot override the chart-owned metrics address
+    template: templates/deployment-worker.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      worker.extraEnv:
+        - name: WORKER_METRICS_ADDR
+          value: ":9090"
+    asserts:
+      - failedTemplate:
+          errorMessage: "worker.extraEnv must not define WORKER_METRICS_ADDR; set worker.httpPort instead so the listener, container port, and probes stay aligned"
+
+  - it: api pdb selects only api pods when enabled
+    template: templates/pdb-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      podDisruptionBudget.enabled: true
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: api
+
+  - it: api pdb preserves explicit zero maxUnavailable
+    template: templates/pdb-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      podDisruptionBudget:
+        enabled: true
+        api:
+          maxUnavailable: 0
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 0
+      - isNull:
+          path: spec.minAvailable
+
+  - it: worker pdb selects only worker pods when enabled
+    template: templates/pdb-worker.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      podDisruptionBudget.enabled: true
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: worker
+
+  - it: worker pdb preserves explicit zero maxUnavailable
+    template: templates/pdb-worker.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+      podDisruptionBudget:
+        enabled: true
+        worker:
+          maxUnavailable: 0
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 0
+      - isNull:
+          path: spec.minAvailable

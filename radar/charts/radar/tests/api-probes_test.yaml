@@ -1,0 +1,38 @@
+suite: api deployment health probes
+templates:
+  - templates/deployment-api.yaml
+  # configmap and secret must be loaded so their include calls resolve during
+  # checksum computation inside the deployment template.
+  - templates/configmap.yaml
+  - templates/secret.yaml
+
+tests:
+  - it: api startup probe targets the startup health endpoint
+    template: templates/deployment-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /healthz/startup
+
+  - it: api liveness probe targets the live health endpoint
+    template: templates/deployment-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz/live
+
+  - it: api readiness probe targets the ready health endpoint
+    template: templates/deployment-api.yaml
+    set:
+      database.url: "postgres://user:pass@db:5432/radar"
+      database.host: db
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /healthz/ready

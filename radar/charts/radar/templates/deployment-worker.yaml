@@ -1,0 +1,148 @@
+{{- range $env := .Values.worker.extraEnv }}
+{{- if eq $env.name "WORKER_METRICS_ADDR" }}
+{{- fail "worker.extraEnv must not define WORKER_METRICS_ADDR; set worker.httpPort instead so the listener, container port, and probes stay aligned" }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "radar.fullname" . }}-worker
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+  annotations:
+    # ArgoCD: start the worker only after the migrate Job (wave 1) completes.
+    # Ignored by plain Helm.
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "radar.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "radar.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+        {{- with .Values.worker.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/configmap: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.worker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "radar.workerServiceAccountName" . }}
+      {{- if eq (include "radar.runtimeAutomountServiceAccountToken" .) "true" }}
+      automountServiceAccountToken: true
+      {{- end }}
+      {{- include "radar.imagePullSecrets" . | nindent 6 }}
+      {{- include "radar.podSecurityContext" (dict "root" . "context" .Values.worker.podSecurityContext) | nindent 6 }}
+
+      {{- if .Values.dbWaitInitContainer.enabled }}
+      initContainers:
+        {{- include "radar.waitForDbInitContainer" . | nindent 8 }}
+      {{- end }}
+
+      containers:
+        - name: worker
+          image: {{ include "radar.worker.image" . }}
+          imagePullPolicy: {{ .Values.image.worker.pullPolicy }}
+          {{- with .Values.worker.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.worker.httpPort }}
+              protocol: TCP
+          {{- with .Values.worker.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.worker.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.worker.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.worker.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "radar.fullname" . }}
+          env:
+            - name: RIVER_MAX_WORKERS
+              value: {{ .Values.worker.riverMaxWorkers | toString | quote }}
+            - name: WORKER_METRICS_ADDR
+              value: {{ printf ":%v" .Values.worker.httpPort | quote }}
+            # Workers use RUNTIME_DATABASE_URL as the writable connection; falls back
+            # to DATABASE_URL when only one database is configured.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radar.databaseSecretName" . }}
+                  key: {{ .Values.database.urlSecretKey }}
+            - name: RUNTIME_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radar.databaseSecretName" . }}
+                  key: {{ .Values.database.runtimeUrlSecretKey }}
+                  optional: true
+            {{- if or .Values.credentials.encryptionKey .Values.credentials.existingSecret }}
+            # Legacy process-key path; optional so an existingSecret that supplies
+            # only the KEK (the always-on path) does not fail with a missing key.
+            - name: CREDENTIAL_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radar.credentialsSecretName" . }}
+                  key: {{ .Values.credentials.encryptionKeySecretKey }}
+                  optional: true
+            - name: CREDENTIAL_ENCRYPTION_KEY_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "radar.credentialsSecretName" . }}
+                  key: {{ .Values.credentials.encryptionKeyVersionSecretKey }}
+                  optional: true
+            {{- end }}
+            {{- if include "radar.kekEnabled" . }}
+            {{- include "radar.kekEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.credentials.kekProvider }}
+            {{- include "radar.kekProviderEnv" . | nindent 12 }}
+            {{- end }}
+            {{- include "radar.otelEnv" (dict "ctx" $ "defaultService" "mcm-worker" "serviceOverride" .Values.opentelemetry.serviceName.worker) | nindent 12 }}
+            {{- with .Values.worker.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if include "radar.kekEnabled" . }}
+          volumeMounts:
+            {{- include "radar.kekVolumeMount" . | nindent 12 }}
+          {{- end }}
+
+      {{- if include "radar.kekEnabled" . }}
+      volumes:
+        {{- include "radar.kekVolume" . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
