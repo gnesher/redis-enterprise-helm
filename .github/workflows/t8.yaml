@@ -1,0 +1,10 @@
+name: T8 IdToken Plain
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - run: echo deploy

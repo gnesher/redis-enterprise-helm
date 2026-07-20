@@ -1,0 +1,6 @@
+name: T7 Pages Reusable
+on:
+  workflow_dispatch:
+jobs:
+  call:
+    uses: ./.github/workflows/t-reusable-pages.yaml
