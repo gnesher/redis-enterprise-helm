@@ -4,7 +4,36 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The radar chart's image defaults must reference publicly pullable images,
+  # or every `helm install` from helm.redis.io/radar fails at pod start. The
+  # radar repository's publish workflow enforces this before producing the
+  # sync PR, but nothing stops a hand-crafted sync from reaching master, so
+  # re-verify here before tagging and publishing.
+  verify-images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify chart images are publicly pullable
+        run: |
+          set -euo pipefail
+
+          values="radar/charts/radar/values.yaml"
+          registry="$(yq '.image.registry' "$values")"
+          for component in app worker migrate; do
+            repository="$(yq ".image.${component}.repository" "$values")"
+            tag="$(yq ".image.${component}.tag" "$values")"
+            image="${registry}/${repository}:${tag}"
+            echo "Checking ${image}"
+            if ! docker buildx imagetools inspect "${image}" >/dev/null; then
+              echo "Image ${image} is not publicly pullable; refusing to release a chart that cannot install." >&2
+              exit 1
+            fi
+          done
+
   call-release-workflow:
+    needs: verify-images
     uses: ./.github/workflows/release-chart-reusable.yaml
     with:
       chart_name: radar
