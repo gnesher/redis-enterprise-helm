@@ -1,7 +1,0 @@
-name: T3 Env Job
-on:
-  workflow_dispatch:
-jobs:
-  call:
-    uses: ./.github/workflows/t-reusable-env.yaml
-    secrets: inherit

@@ -1,6 +1,0 @@
-name: T6 IdToken Reusable
-on:
-  workflow_dispatch:
-jobs:
-  call:
-    uses: ./.github/workflows/t-reusable-idtoken.yaml

@@ -1,6 +1,0 @@
-name: T4 Env Only
-on:
-  workflow_dispatch:
-jobs:
-  call:
-    uses: ./.github/workflows/t-reusable-env2.yaml

@@ -1,6 +1,0 @@
-name: T5 OIDC Only
-on:
-  workflow_dispatch:
-jobs:
-  call:
-    uses: ./.github/workflows/t-reusable-oidc.yaml
